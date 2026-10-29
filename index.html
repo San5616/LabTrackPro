@@ -1576,6 +1576,121 @@
     function escapeHtml(s) {
       return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     }
+       // ================= UNIFIED 382-ITEM GOOGLE SHEET BRIDGE FOR LABTRACK PRO =================
+    window.addEventListener("DOMContentLoaded", () => {
+      // 1. Top Nav में LabTrackAdvance (Register View) पर जाने का 1-Click बटन जोड़ें
+      const navLeft = document.getElementById("nav-left");
+      if (navLeft && !document.getElementById("goToAdvBtn")) {
+        navLeft.innerHTML = `
+          <a id="goToAdvBtn" href="https://san5616.github.io/LabTrackAdvance/" style="background:var(--accent); color:#fff; padding:5px 9px; border-radius:8px; font-size:11.5px; font-weight:800; text-decoration:none; display:inline-flex; align-items:center; gap:4px;">
+            📋 Advance Table
+          </a>
+        `;
+      }
+    });
+
+    // 2. Override Sync ताकि LabTrackPro सीधे आपकी 382 आइटम्स वाली शीट से पढ़े और लिखे
+    window.syncFromGoogleSheet = async function (showMsg = true) {
+      const url = (document.getElementById("gas-url-input")?.value || state.gasUrl || "").trim();
+      if (!url) return;
+      try {
+        if (showMsg) showToast("🔄 Syncing 382 items from Google Sheet...");
+        const res = await fetch(`${url}?action=pull`);
+        const j = await res.json();
+        if (j.ok && Array.isArray(j.items)) {
+          state.raw382 = j.items;
+          // Map 382 items to LabTrackPro format
+          const boxMap = {};
+          j.items.forEach(it => {
+            const gName = it.godrej || "Unpacked / In Carton Box";
+            if (!boxMap[gName]) {
+              boxMap[gName] = {
+                id: gName,
+                serialCode: gName,
+                name: gName,
+                location: it.lab || "11-12 Physics Lab",
+                subLocation: it.partition || "",
+                subject: it.subject || "Physics",
+                classGroup: it.classGroup || "11-12",
+                tags: [],
+                coverPhoto: "",
+                isDeleted: false
+              };
+            }
+          });
+          state.boxes = Object.values(boxMap);
+          state.items = j.items.map(it => ({
+            id: String(it.id),
+            sr: it.sr,
+            verified: it.verified,
+            name: `#${it.sr} ${it.name}`,
+            rawName: it.name,
+            classGroup: it.classGroup || "11-12",
+            subject: it.subject || "Physics",
+            category: it.category || "Mechanics",
+            quantity: Number(it.qty) || 0,
+            unit: it.unit || "NOS",
+            boxSerial: it.godrej || "Unpacked / In Carton Box",
+            boxName: it.godrej || "Unpacked / In Carton Box",
+            location: it.lab || "11-12 Physics Lab",
+            subLocation: it.partition || "",
+            status: it.issuedTo ? "OUT" : "IN",
+            checkedOutBy: it.issuedTo || "",
+            returnDate: it.returnDate || "",
+            photoUrl: it.photo || "",
+            isDeleted: false,
+            _orig: it
+          }));
+          renderAll();
+          if (showMsg) showToast(`✅ Loaded ${state.items.length} items from Sheet!`);
+        }
+      } catch (e) {
+        if (showMsg) showToast("⚠️ Sheet Sync Error");
+      }
+    };
+
+    // 3. जब LabTrackPro में Qty (+ / -) या कुछ भी बदलें, तो वापस उसी 382 वाली शीट में सेव हो
+    async function pushProChangesTo382Sheet() {
+      if (!state.gasUrl || !state.items.length) return;
+      const updated382 = state.items.map(it => {
+        const base = it._orig || {};
+        const q = Number(it.quantity) || 0;
+        const rate = Number(base.rate) || 0;
+        return {
+          ...base,
+          id: Number(it.id) || it.id,
+          sr: it.sr || base.sr || 1,
+          name: it.rawName || it.name.replace(/^#\d+\s*/, ""),
+          classGroup: it.classGroup,
+          subject: it.subject,
+          category: it.category,
+          qty: q,
+          workingQty: Math.max(0, q - Number(base.damagedQty || 0)),
+          amt: q * rate,
+          lab: it.location,
+          godrej: it.boxSerial,
+          partition: it.subLocation,
+          issuedTo: it.status === "OUT" ? (it.checkedOutBy || "Issued") : "",
+          photo: it.photoUrl || ""
+        };
+      });
+      await fetch(state.gasUrl, {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ updatedAt: new Date().toISOString(), items: updated382 })
+      });
+    }
+
+    const _origQuickQty = window.quickQtyChange;
+    window.quickQtyChange = async function (itemId, delta) {
+      const item = state.items.find(i => String(i.id) === String(itemId));
+      if (!item) return;
+      item.quantity = Math.max(0, (Number(item.quantity) || 0) + delta);
+      renderAll();
+      await pushProChangesTo382Sheet();
+      showToast("✅ Updated in Google Sheet!");
+    };
   </script>
 </body>
 </html>
